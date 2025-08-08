@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive Graph Builder with DFS Visualizer</title>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.6.0/lib/p5.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+    #uiPanel {
+      position: fixed;
+      top: 10px; right: 10px;
+      width: 200px;
+      background: #eee;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 10;
+    }
+    button {
+      width: 100%;
+      margin: 5px 0;
+      padding: 8px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div id="uiPanel">
+    <h3>Graph Builder</h3>
+    <button id="addNodeBtn">Add Node</button>
+    <button id="addEdgeBtn">Add Edge</button>
+    <button id="runDFSBtn">Run DFS</button>
+    <button id="deleteBtn">Delete</button>
+    <button id="resetZoomBtn">Reset Zoom</button>
+    <p id="info">Click "Add Node" then click canvas to place nodes.<br>Click "Add Edge", then click two nodes to connect.</p>
+  </div>
+
+  <script>
+    let nodes = [];
+    let edges = [];
+    let mode = 'none'; // 'addNode', 'addEdge', 'delete', 'none'
+    let selectedNode = null;
+    let visited = new Set();
+    let colors = [];
+    let componentColors = [];
+    let uiPanelRect = null;
+    let zoom = 1;
+    let zoomMin = 0.25;
+    let zoomMax = 4;
+    let offsetX = 0;
+    let offsetY = 0;
+    let isPanning = false;
+    let panStart = { x: 0, y: 0 };
+    let currentNode = null;
+    let currentEdge = null;
+    const nodeRadius = 15;
+
+    function setup() {
+      const canvas = createCanvas(windowWidth, windowHeight);
+      canvas.elt.oncontextmenu = () => false;
+      uiPanelRect = document.getElementById('uiPanel').getBoundingClientRect();
+      noLoop();
+
+      document.getElementById('addNodeBtn').onclick = () => {
+        mode = 'addNode';
+        selectedNode = null;
+        infoText('Add Node mode: Click on canvas to add nodes.');
+      };
+      document.getElementById('addEdgeBtn').onclick = () => {
+        mode = 'addEdge';
+        selectedNode = null;
+        infoText('Add Edge mode: Click two nodes to connect.');
+      };
+      document.getElementById('runDFSBtn').onclick = () => {
+        mode = 'none';
+        if (nodes.length === 0) {
+          infoText('No nodes to run DFS.');
+          return;
+        }
+        runDFS();
+      };
+      document.getElementById('deleteBtn').onclick = () => {
+        mode = 'delete';
+        selectedNode = null;
+        infoText('Delete mode: Click a node twice to delete the node and all edges touching it. Click two nodes to delete the edge between them.')
+      };
+      document.getElementById('resetZoomBtn').onclick = () => {
+        selectedNode = null;
+        zoom = 1;
+        offsetX = 0;
+        offsetY = 0;
+        redraw();
+      };
+    }
+
+    function draw() {
+      clear();
+
+      translate(offsetX, offsetY);
+      scale(zoom);
+
+      background(255);
+
+      // Draw edges
+      stroke(0);
+      strokeWeight(2);
+      for (let e of edges) {
+        let n1 = nodes[e[0]];
+        let n2 = nodes[e[1]];
+        line(n1.x, n1.y, n2.x, n2.y);
+      }
+
+      if (currentEdge !== null) {
+        stroke('#FF4500');  // orange-red highlight
+        strokeWeight(4);
+        let n1 = nodes[currentEdge[0]];
+        let n2 = nodes[currentEdge[1]];
+        line(n1.x, n1.y, n2.x, n2.y);
+      }
+
+      // Draw nodes
+      for (let i = 0; i < nodes.length; i++) {
+        let n = nodes[i];
+        noStroke();
+        fill(componentColors[i] || '#999');
+        circle(n.x, n.y, nodeRadius * 2);
+
+        if (typeof currentNode !== 'undefined' && i === currentNode) {
+          stroke(255, 0, 0);
+          strokeWeight(3);
+          noFill();
+          circle(n.x, n.y, nodeRadius * 2 + 6);
+        }
+
+        noStroke();
+        fill(0);
+        textAlign(CENTER, CENTER);
+        text(i, n.x, n.y);
+      }
+    }
+
+    function mousePressed() {
+
+      if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
+
+      if (mouseX >= uiPanelRect.left &&
+          mouseX <= uiPanelRect.right &&
+          mouseY >= uiPanelRect.top &&
+          mouseY <= uiPanelRect.bottom) {
+          return; // Don't add nodes if clicking over the UI panel
+      }
+
+      let worldX = (mouseX - offsetX) / zoom;
+      let worldY = (mouseY - offsetY) / zoom; // Account for zooming and panning
+
+      if (mouseButton === RIGHT) {
+        isPanning = true;
+        panStart = createVector(mouseX, mouseY);
+      } else if (mouseButton === LEFT) {
+        if (mode === 'addNode') {
+          nodes.push({ x: worldX, y: worldY });
+          componentColors.push('#999');
+          redraw();
+          infoText('Successfully built node');
+        } else if (mode === 'addEdge') {
+          let clickedNode = getNodeAtPosition(worldX, worldY);
+          if (clickedNode !== null) {
+            if (selectedNode === null) {
+              selectedNode = clickedNode;
+            } else if (selectedNode !== clickedNode) {
+              if (!edgeExists(selectedNode, clickedNode)) {
+                edges.push([selectedNode, clickedNode]);
+                redraw();
+                infoText(`Successfully built edge between node ${selectedNode} and node ${clickedNode}.`);
+                selectedNode = null;
+              } else {
+                infoText(`Edge between node ${selectedNode} and node ${clickedNode} already exists.`);
+                selectedNode = null;
+              }
+            }
+          }
+        } else if (mode === 'delete') {
+          let clickedNode = getNodeAtPosition(worldX, worldY);
+          if (clickedNode !== null) {
+            if (selectedNode === null) {
+              selectedNode = clickedNode;
+            } else if (selectedNode === clickedNode) {
+              nodes.splice(selectedNode, 1);
+              componentColors.splice(selectedNode, 1);
+              for (let i = edges.length - 1; i >= 0; i--) {
+                let [u, v] = edges[i];
+                if (u === selectedNode || v === selectedNode) {
+                  edges.splice(i, 1);
+                } else {
+                  if (u > selectedNode) u--;
+                  if (v > selectedNode) v--;
+                  edges[i] = [u, v];
+                }
+              }
+              redraw();
+              infoText(`Node ${selectedNode} and its edges deleted.`);
+              selectedNode = null;
+            } else if (selectedNode !== clickedNode) {
+              const edgeIndex = edges.findIndex(e => (e[0] === selectedNode && e[1] === clickedNode) || (e[0] === clickedNode && e[1] === selectedNode));
+              if (edgeIndex !== -1) {
+                edges.splice(edgeIndex, 1);
+                redraw();
+                infoText(`Edge between node ${selectedNode} and node ${clickedNode} deleted.`);
+              } else {
+                infoText(`No edge exists between node ${selectedNode} and node ${clickedNode}.`);
+              }
+              selectedNode = null;
+            }
+          }
+        }
+      }
+    }
+
+    function edgeExists(a, b) {
+      return edges.some(([x, y]) =>
+        (x === a && y === b) || (x === b && y === a)
+      );
+    }
+
+    function mouseDragged() {
+      if (isPanning) {
+        let dx = mouseX - panStart.x;
+        let dy = mouseY - panStart.y;
+        offsetX += dx;
+        offsetY += dy;
+        panStart.set(mouseX, mouseY);
+        redraw();
+      }
+    }
+
+    function mouseReleased() {
+      if (mouseButton === RIGHT) {
+        isPanning = false;
+      }
+    }
+
+    function getNodeAtPosition(x, y) {
+      for (let i = 0; i < nodes.length; i++) {
+        let n = nodes[i];
+        let d = dist(x, y, n.x, n.y);
+        if (d <= nodeRadius) return i;
+      }
+      return null;
+    }
+
+    async function runDFS() {
+      let adj = [];
+      for (let i = 0; i < nodes.length; i++) adj.push([]);
+      for (let [u, v] of edges) {
+        adj[u].push(v);
+        adj[v].push(u);
+      }
+
+      visited = new Set();
+      componentColors = Array(nodes.length).fill(null);
+      let colorPalette = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6'];
+      let colorIndex = 0;
+
+      currentNode = null;
+      currentEdge = null;
+
+      async function dfs(u, color) { // Show the DFS Process
+        visited.add(u);
+        componentColors[u] = color;
+        currentNode = u;
+        redraw();
+        await sleep(600);
+
+        for (let v of adj[u]) {
+          if (!visited.has(v)) {
+            currentEdge = [u, v];
+            redraw();
+            await sleep(300);
+
+            await dfs(v, color);
+
+            currentEdge = [v, u];
+            currentNode = u;
+            redraw();
+            await sleep(300);
+          }
+        }
+
+        currentNode = null;
+        currentEdge = null;
+        redraw();
+      }
+
+      for (let i = 0; i < nodes.length; i++) {
+        if (!visited.has(i)) {
+          infoText(`Starting DFS at node ${i}`);
+          await dfs(i, colorPalette[colorIndex % colorPalette.length]);
+          colorIndex++;
+        }
+      }
+
+      currentNode = null;
+      redraw();
+      infoText('DFS complete!');
+    }
+
+
+    function infoText(txt) {
+      document.getElementById('info').innerHTML = txt;
+    }
+
+    function mouseWheel(event) {
+      let oldZoom = zoom;
+      zoom -= event.delta * 0.001;
+      zoom = constrain(zoom, zoomMin, zoomMax);
+      redraw();
+      return false; // prevent page scroll
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function windowResized() {
+      resizeCanvas(windowWidth, windowHeight);
+      uiPanelRect = document.getElementById('uiPanel').getBoundingClientRect();
+      redraw();
+    }
+
+
+  </script>
+</body>
+</html>

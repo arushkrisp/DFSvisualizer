@@ -40,6 +40,10 @@ An intuitive, interactive, and zoomable graph-building tool with depth-first sea
 | Zoom             | Mouse scroll        |
 | Reset Zoom       | Click "Reset Zoom"  |
 
+## 🎬 Demo
+
+https://youtu.be/bAFIsWZ6wT8
+
 ## 🧪 Known Limitations
 
 - No drag-to-move nodes (yet)
